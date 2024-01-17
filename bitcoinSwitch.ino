@@ -1,3 +1,26 @@
+///////////////////////////////////////////////////////////////////////////////////
+//         Change these variables directly in the code or use the config         //
+//  form in the web-installer https://lnbits.github.io/bitcoinswitch/installer/  //
+///////////////////////////////////////////////////////////////////////////////////
+
+String version = "0.1.1";
+
+String ssid = "null"; // 'String ssid = "ssid";' / 'String ssid = "null";'
+String wifiPassword = "null"; // 'String wifiPassword = "password";' / 'String wifiPassword = "null";'
+
+// String from the lnurlDevice plugin in LNbits lnbits.com
+String switchStr = "null"; // 'String switchStr = "ws url";' / 'String switchStr = "null";'
+
+// Change for threshold trigger only
+String wallet; // ID for the LNbits wallet you want to watch,  'String wallet = "walley ID";' / 'String wallet = "null";'
+long threshold; // In sats, 'long threshold = 0;' / 'long threshold = 100;'
+int thresholdPin; // GPIO pin, 'int thresholdPin = 16;' / 'int thresholdPin;'
+long thresholdTime; // Time to turn pin on, 'long thresholdTime = 2000;' / 'long thresholdTime;'
+
+///////////////////////////////////////////////////////////////////////////////////
+//                                 END of variables                              //
+///////////////////////////////////////////////////////////////////////////////////
+
 #include <WiFi.h>
 #include <FS.h>
 #include <SPIFFS.h>
@@ -9,155 +32,173 @@ fs::SPIFFSFS &FlashFS = SPIFFS;
 #define FORMAT_ON_FAIL true
 #define PARAM_FILE "/elements.json"
 
-///////////CHANGE////////////////
-         
-int portalPin = 4;
+String urlPrefix = "ws://";
+String apiUrl = "/api/v1/ws/";
 
-///////////STATUS LED////////////////
-MultiLed multiLed(32, 33, 25);
+// length of lnurldevice id
+// 7dhdyJ9bbZNWNVPiFSdmb5
+int uidLength = 22;
 
-/////////////////////////////////
-
-// Access point variables
 String payloadStr;
-String password;
-String serverFull;
 String lnbitsServer;
-String ssid;
-String wifiPassword;
 String deviceId;
 String dataId;
-String lnurl;
-
 bool paid;
 bool down = false;
-bool triggerConfig = false; 
 bool wsConnection = false;
+long thresholdSum = 0;
+long payment_amount = 0;
+
+// Serial config
+int portalPin = 4;
+
+// Status LED
+MultiLed multiLed(32, 33, 25);
 
 WebSocketsClient webSocket;
 
 struct KeyValue {
-  String key;
-  String value;
+    String key;
+    String value;
 };
 
 void setup()
 {
-  multiLed.setup();
-  Serial.begin(115200);
-  int timer = 0;
-  pinMode (2, OUTPUT);
-
-  multiLed.setColor(MultiLed::COLOR_RED);
-
-  while (timer < 2000)
-  {
-    digitalWrite(2, LOW);
-    multiLed.setColor(MultiLed::COLOR_OFF);
-    Serial.println(touchRead(portalPin));
-    if(touchRead(portalPin) < 40){
-      Serial.println("Launch portal");
-      triggerConfig = true;
-      timer = 5000;
-    }
-    delay(150);
-    digitalWrite(2, HIGH);
+    multiLed.setup();
+    Serial.begin(115200);
+    Serial.println("Welcome to BitcoinSwitch, running on version: " + version);
+    bool triggerConfig = false;
+    pinMode (2, OUTPUT); // To blink on board LED
     multiLed.setColor(MultiLed::COLOR_RED);
-    timer = timer + 300;
-    delay(150);
-  }
+    FlashFS.begin(FORMAT_ON_FAIL);
+    int timer = 0;
+    
+    while (timer < 2000)
+    {
+        digitalWrite(2, HIGH);
+        multiLed.setColor(MultiLed::COLOR_OFF);
+        Serial.println(touchRead(portalPin));
+        if (touchRead(portalPin) < 60)
+        {
+            triggerConfig = true;
+            timer = 5000;
+        }
 
-  timer = 0;
-
-  FlashFS.begin(FORMAT_ON_FAIL);
-
-  // get the saved details and store in global variables
-  readFiles();
-
-  if (triggerConfig == false){
-
-    WiFi.begin(ssid.c_str(), wifiPassword.c_str());
-    while (WiFi.status() != WL_CONNECTED && timer < 20000) {
-      delay(500);
-      multiLed.setColor(MultiLed::COLOR_OFF);
-
-      digitalWrite(2, HIGH);
-      Serial.print(".");
-      timer = timer + 1000;
-      if(timer > 19000){
-        triggerConfig = true;
-      }
-      delay(500);
-      multiLed.setColor(MultiLed::COLOR_BLUE);
-
-      digitalWrite(2, LOW);
-    }
-  }
-
-  if (triggerConfig == true)
-  {
-    digitalWrite(2, HIGH);
-    Serial.println("USB Config triggered");
-
-    multiLed.setColor(MultiLed::COLOR_OFF);
-    delay(250);
-
-    for (int i = 0; i < 3; i++) {
-      multiLed.setColor(MultiLed::COLOR_GREEN);
-      delay(250);
-      multiLed.setColor(MultiLed::COLOR_RED);
-      delay(250);
+        timer = timer + 100;
+        delay(150);
+        digitalWrite(2, LOW);
+        multiLed.setColor(MultiLed::COLOR_RED);
+        delay(150);
     }
 
-    multiLed.setColor(MultiLed::COLOR_BLUE);
-    configOverSerialPort();
-  }
+    readFiles(); // get the saved details and store in global variables
 
-  Serial.println(lnbitsServer + "/api/v1/ws/" + deviceId);
-  webSocket.beginSSL(lnbitsServer, 443, "/api/v1/ws/" + deviceId);
-  webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(1000);
+    if(triggerConfig == true || ssid == "" || ssid == "null"){
+        Serial.println("Launch serial config");
+        multiLed.setColor(MultiLed::COLOR_OFF);
+        delay(250);
+
+        for (int i = 0; i < 3; i++) {
+          multiLed.setColor(MultiLed::COLOR_GREEN);
+          delay(250);
+          multiLed.setColor(MultiLed::COLOR_RED);
+          delay(250);
+        }
+
+        multiLed.setColor(MultiLed::COLOR_BLUE);
+        configOverSerialPort();
+    }
+    else{
+        WiFi.begin(ssid.c_str(), wifiPassword.c_str());
+        Serial.print("Connecting to WiFi");
+        while (WiFi.status() != WL_CONNECTED) {
+            Serial.print(".");
+            delay(500);
+            digitalWrite(2, HIGH);
+            multiLed.setColor(MultiLed::COLOR_OFF);
+            Serial.print(".");
+            delay(500);
+            multiLed.setColor(MultiLed::COLOR_BLUE);
+            digitalWrite(2, LOW);
+        }
+    }
+
+    if(threshold != 0){ // Use in threshold mode
+        Serial.println("");
+        Serial.println("Using threshold mode");
+        Serial.println("Connecting to websocket: " + urlPrefix + lnbitsServer + apiUrl + wallet);
+        webSocket.beginSSL(lnbitsServer, 443, apiUrl + wallet);
+    }
+    else{ // Use in normal mode
+        Serial.println("");
+        Serial.println("Using normal mode");
+        Serial.println("Connecting to websocket: " + urlPrefix + lnbitsServer + apiUrl + deviceId);
+        webSocket.beginSSL(lnbitsServer, 443, apiUrl + deviceId);
+    }
+    webSocket.onEvent(webSocketEvent);
+    webSocket.setReconnectInterval(1000);
 }
 
 void loop() {
-  while(WiFi.status() != WL_CONNECTED){
-    Serial.println("Failed to connect");
-    delay(250);
-    multiLed.setColor(MultiLed::COLOR_OFF);
-    delay(250);
-    multiLed.setColor(MultiLed::COLOR_BLUE);
-  }
-  digitalWrite(2, LOW);
-  payloadStr = "";
-  delay(2000);
-  while(paid == false){
-    webSocket.loop();
-
-    multiLed.setColor(wsConnection ? MultiLed::COLOR_GREEN : MultiLed::COLOR_RED);
-
-    if (paid) {
-      multiLed.setColor(MultiLed::COLOR_BLUE);
-      pinMode(getValue(payloadStr, '-', 0).toInt(), OUTPUT);
-      digitalWrite(getValue(payloadStr, '-', 0).toInt(), HIGH);
-      delay(getValue(payloadStr, '-', 1).toInt());
-
-      digitalWrite(getValue(payloadStr, '-', 0).toInt(), LOW);
-      multiLed.setColor(wsConnection ? MultiLed::COLOR_GREEN : MultiLed::COLOR_RED);
+    while(WiFi.status() != WL_CONNECTED){ // check wifi again
+        Serial.println("Failed to connect");
+        delay(250);
+        multiLed.setColor(MultiLed::COLOR_OFF);
+        delay(250);
+        multiLed.setColor(MultiLed::COLOR_BLUE);
     }
-  }
-  Serial.println("Paid");
-  paid = false;
+    digitalWrite(2, LOW);
+    payloadStr = "";
+    delay(2000);
+    while(paid == false){ // loop and wait for payment
+        webSocket.loop();
+        multiLed.setColor(wsConnection ? MultiLed::COLOR_GREEN : MultiLed::COLOR_RED);
+        if(paid){
+            if(threshold != 0){ // If in threshold mode we check the "balance" pushed by the websocket and use the pin/time preset
+                StaticJsonDocument<1900> doc;
+                DeserializationError error = deserializeJson(doc, payloadStr);
+                if (error) {
+                    Serial.print("deserializeJson() failed: ");
+                    Serial.println(error.c_str());
+                    return;
+                }
+                JsonObject payment = doc["payment"];
+                payment_amount = payment["amount"];
+                thresholdSum = thresholdSum + payment_amount;
+                Serial.println("thresholdSum: " + String(thresholdSum));
+                Serial.println("threshold: " + String((threshold * 1000)));
+                Serial.println("thresholdPin: " + String(thresholdPin));
+                if(thresholdSum >= (threshold * 1000)){
+                    multiLed.setColor(MultiLed::COLOR_BLUE);
+                    pinMode (thresholdPin, OUTPUT);
+                    digitalWrite(thresholdPin, HIGH);
+                    delay(thresholdTime);
+                    digitalWrite(thresholdPin, LOW);
+                    multiLed.setColor(wsConnection ? MultiLed::COLOR_GREEN : MultiLed::COLOR_RED);
+                    thresholdSum = 0;
+                }
+            }
+            else{ // If in normal mode we use the pin/time pushed by the websocket
+                multiLed.setColor(MultiLed::COLOR_BLUE);
+                pinMode(getValue(payloadStr, '-', 0).toInt(), OUTPUT);
+                digitalWrite(getValue(payloadStr, '-', 0).toInt(), HIGH);
+                delay(getValue(payloadStr, '-', 1).toInt());
+                digitalWrite(getValue(payloadStr, '-', 0).toInt(), LOW);
+                multiLed.setColor(wsConnection ? MultiLed::COLOR_GREEN : MultiLed::COLOR_RED);
+            }
+        }
+    }
+    Serial.println("Paid");
+    paid = false;
 }
 
 //////////////////HELPERS///////////////////
-
 
 String getValue(String data, char separator, int index)
 {
     int found = 0;
     int strIndex[] = { 0, -1 };
     int maxIndex = data.length() - 1;
-
     for (int i = 0; i <= maxIndex && found <= index; i++) {
         if (data.charAt(i) == separator || i == maxIndex) {
             found++;
@@ -168,53 +209,86 @@ String getValue(String data, char separator, int index)
     return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
 }
 
-void readFiles()
+String getJsonValue(JsonDocument &doc, const char* name)
 {
-  File paramFile = FlashFS.open(PARAM_FILE, "r");
-  if (paramFile)
-  {
-    StaticJsonDocument<1500> doc;
-    DeserializationError error = deserializeJson(doc, paramFile.readString());
-
-    const JsonObject maRoot0 = doc[0];
-    const char *maRoot0Char = maRoot0["value"];
-    password = maRoot0Char;
-    Serial.println(password);
-
-    const JsonObject maRoot1 = doc[1];
-    const char *maRoot1Char = maRoot1["value"];
-    ssid = maRoot1Char;
-    Serial.println(ssid);
-
-    const JsonObject maRoot2 = doc[2];
-    const char *maRoot2Char = maRoot2["value"];
-    wifiPassword = maRoot2Char;
-    Serial.println(wifiPassword);
-
-    const JsonObject maRoot3 = doc[3];
-    const char *maRoot3Char = maRoot3["value"];
-    serverFull = maRoot3Char;
-    lnbitsServer = serverFull.substring(5, serverFull.length() - 33);
-    deviceId = serverFull.substring(serverFull.length() - 22);
-
-    const JsonObject maRoot4 = doc[4];
-    const char *maRoot4Char = maRoot4["value"];
-    lnurl = maRoot4Char;
-    Serial.println(lnurl);
-  }
-  paramFile.close();
+    for (JsonObject elem : doc.as<JsonArray>()) {
+        if (strcmp(elem["name"], name) == 0) {
+            String value = elem["value"].as<String>();
+            return value;
+        }
+    }
+    return "";  // return empty string if not found
 }
 
-//////////////////NODE CALLS///////////////////
+void readFiles()
+{
+    File paramFile = FlashFS.open(PARAM_FILE, "r");
+    if (paramFile)
+    {
+        StaticJsonDocument<2500> doc;
+        DeserializationError error = deserializeJson(doc, paramFile.readString());
+        if(error){
+            Serial.print("deserializeJson() failed: ");
+            Serial.println(error.c_str());
+            return;
+        }
+        if(ssid == "null"){ // check ssid is not set above
+            ssid = getJsonValue(doc, "ssid");
+            Serial.println("");
+            Serial.println("ssid used from memory");
+            Serial.println("SSID: " + ssid);
+        }
+        else{
+            Serial.println("");
+            Serial.println("ssid hardcoded");
+            Serial.println("SSID: " + ssid);
+        }
+        if(wifiPassword == "null"){ // check wifiPassword is not set above
+            wifiPassword = getJsonValue(doc, "wifipassword");
+            Serial.println("");
+            Serial.println("ssid password used from memory");
+            Serial.println("SSID password: " + wifiPassword);
+        }
+        else{
+            Serial.println("");
+            Serial.println("ssid password hardcoded");
+            Serial.println("SSID password: " + wifiPassword);
+        }
+        if(switchStr == "null"){ // check switchStr is not set above
+            switchStr = getJsonValue(doc, "socket");
+            Serial.println("");
+            Serial.println("switchStr used from memory");
+            Serial.println("switchStr: " + switchStr);
+        }
+        else{
+            Serial.println("");
+            Serial.println("switchStr hardcoded");
+            Serial.println("switchStr: " + switchStr);
+        }
 
-void checkConnection(){
-  WiFiClientSecure client;
-  client.setInsecure();
-  const char* lnbitsserver = lnbitsServer.c_str();
-  if (!client.connect(lnbitsserver, 443)){
-    down = true;
-    return;   
-  }
+        int protocolIndex = switchStr.indexOf("://");
+        if (protocolIndex == -1) {
+            Serial.println("Invalid switchStr: " + switchStr);
+            return;
+        }
+        urlPrefix = switchStr.substring(0, protocolIndex + 3);
+
+        int domainIndex = switchStr.indexOf("/", protocolIndex + 3);
+        if (domainIndex == -1) {
+            Serial.println("Invalid switchStr: " + switchStr);
+            return;
+        }
+
+        lnbitsServer = switchStr.substring(protocolIndex + 3, domainIndex);
+        apiUrl = switchStr.substring(domainIndex, switchStr.length() - uidLength);
+        deviceId = switchStr.substring(switchStr.length() - uidLength);
+
+        Serial.println("LNbits ws prefix: " + urlPrefix);
+        Serial.println("LNbits server: " + lnbitsServer);
+        Serial.println("LNbits api url: " + apiUrl);
+        Serial.println("Switch device ID: " + deviceId);
+    }
+    paramFile.close();
 }
 
 //////////////////WEBSOCKET///////////////////
@@ -223,26 +297,24 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
         case WStype_DISCONNECTED:
             Serial.printf("[WSc] Disconnected!\n");
-            
             wsConnection = false;
             break;
         case WStype_CONNECTED:
-            {
-              Serial.printf("[WSc] Connected to url: %s\n",  payload);
-              // send message to server when Connected
-              webSocket.sendTXT("Connected");
-
-              wsConnection = true;
-            }
+            Serial.printf("[WSc] Connected to url: %s\n",  payload);
+            webSocket.sendTXT("Connected"); // send message to server when Connected
+            wsConnection = true;
             break;
         case WStype_TEXT:
             payloadStr = (char*)payload;
+            payloadStr.replace(String("'"), String('"'));
+            payloadStr.toLowerCase();
+            Serial.println("Received data from socket: " + payloadStr);
             paid = true;
-    case WStype_ERROR: 
-    case WStype_FRAGMENT_TEXT_START:
-    case WStype_FRAGMENT_BIN_START:
-    case WStype_FRAGMENT:
-    case WStype_FRAGMENT_FIN:
-      break;
+        case WStype_ERROR:
+        case WStype_FRAGMENT_TEXT_START:
+        case WStype_FRAGMENT_BIN_START:
+        case WStype_FRAGMENT:
+        case WStype_FRAGMENT_FIN:
+            break;
     }
 }
